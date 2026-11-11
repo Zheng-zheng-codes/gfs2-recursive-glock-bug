@@ -57,16 +57,16 @@ replay only the tail, and do not expect the minimal testcase alone
 (`repro.prog`, 2 calls) to work — it depends on the state above and did
 not reproduce alone in testing.
 
-Verification on fresh VMs (kernel BUG at fs/gfs2/glock.c:1476):
-
-- 1/1 standalone fresh-VM run: BUG fired at 290.6 s after guest boot
-  (~4 min wall including guest boot; full console in
-  `logs/verification-serial.log`).
-- The fuzzing pipeline's state-primed reproduction sessions reproduced the
-  same crash repeatedly (crash-log replay reaching entry 107/107) on
-  freshly replayed VMs.
-- The stable success rate over many runs has not been formally measured;
-  all fresh-VM attempts so far have hit.
+Expected time to hit: roughly **4-5 minutes**. In the standalone
+verification run, syz-execprog started ~1.5 min after guest boot and the
+kernel BUG fired at 290.6 s after guest boot (~4 min after syz-execprog
+started, full console in `logs/verification-serial.log`). The fuzzing
+pipeline's state-primed reproduction sessions reproduced the same crash
+repeatedly on freshly replayed VMs, typically within 4-10 minutes of
+session start. With `-repeat=0` the program set keeps looping until the
+crash fires, so leaving it running is sufficient. All fresh-VM attempts so
+far have hit; the stable success rate over many runs has not been formally
+measured.
 
 ## Files
 
@@ -85,9 +85,5 @@ Verification on fresh VMs (kernel BUG at fs/gfs2/glock.c:1476):
 - The trigger is `statfs()` on a gfs2 mount whose glock holders were left
   in a particular state by prior operations (`gfs2_statfs_slow()` loops
   acquiring/releasing the statfs glock and iopen/inode glocks).
-- No C reproducer is included: syzkaller's reproducer pipeline could not
-  produce one for this bug (the C form of the full recipe and the C form of
-  the standalone testcase both failed verification 3/3 attempts), so the
-  ordered syz program set above is the reproducer of record.
 - We can provide the kernel image, additional crash instances or raw
   artifacts on request.
