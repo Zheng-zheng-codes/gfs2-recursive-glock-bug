@@ -5,13 +5,13 @@ reproduced and verified on the same kernel build.
 
 ## Summary
 
-Acquiring a glock for statfs trips GFS2's recursive-holder detection:
+Acquiring glock holders for resource groups from the statfs slow path trips
+GFS2's recursive-holder detection:
 
 ```
 ------------[ cut here ]------------
 kernel BUG at fs/gfs2/glock.c:1476!
 Oops: invalid opcode: 0000 [#1] SMP KASAN NOPTI
-CPU: 1 UID: 0 PID: 27376 Comm: syz.7.24 Not tainted 7.4.0-rc1-kernsight-kasan+ #3
 RIP: 0010:add_to_queue fs/gfs2/glock.c:1476 [inline]
 RIP: 0010:gfs2_glock_nq+0x6ca/0x17b0 fs/gfs2/glock.c:1518
 Call Trace:
@@ -24,13 +24,22 @@ Call Trace:
  __do_sys_statfs+0x79/0xf0 fs/statfs.c:194
 ```
 
-`add_to_queue()` (fs/gfs2/glock.c) detects that the task is trying to queue
-a holder for a glock it already holds in an incompatible state and calls
-`BUG()` from `trap_recursive()` (glock.c:1476). Here the statfs slow path
-(`gfs2_statfs_slow()`, fs/gfs2/super.c:900) acquires the same glock twice
-within one task: it first grabs a holder (statfs glock via
-`gfs2_glock_nq_init()`), and while that holder is still held requests the
-same glock again, which the recursive-holder check rejects.
+The BUG is triggered in `add_to_queue()` while `gfs2_statfs_slow()` is
+acquiring glock holders for resource groups. The recursive-holder check
+detects that the same task is attempting to queue another holder for a
+glock that already has a holder owned by that task.
+
+The console diagnostics captured during the verified run support this
+reading (see `logs/crash-serial-excerpt.txt`): the dumped glock is a
+resource-group glock (`G: s:SH n:3/22 ... t:SH`), both the "original" and
+the "new" holders belong to the same task (pid 17923,
+`statfs_by_dentry+0x13d/0x220`, lock type 3 = resource group, requested
+state 3 = shared).
+
+The resource-group iteration in `gfs2_statfs_slow()` may revisit a resource
+group before its previous holder has been released, causing the recursive
+acquisition. This is a possible explanation based on the source code; the
+exact cause in our reproduction has not yet been confirmed.
 
 ## How to reproduce (stable)
 
@@ -52,38 +61,49 @@ syz-execprog -procs=8 -threaded -repeat=0 -executor ./syz-executor repro.kernsig
 
 `reproducer/repro.kernsight.prog` first replays the state-building tail
 (mounting a gfs2 image and performing lock-heavy operations) and then
-triggers `statfs()`. Run it as-is in a loop (`-repeat=0`); do not try to
-replay only the tail, and do not expect the minimal testcase alone
-(`repro.prog`, 2 calls) to work — it depends on the state above and did
-not reproduce alone in testing.
+triggers `statfs()`. Run it as-is in a loop (`-repeat=0`).
 
-Expected time to hit: roughly **4-5 minutes**. In the standalone
-verification run, syz-execprog started ~1.5 min after guest boot and the
-kernel BUG fired at 290.6 s after guest boot (~4 min after syz-execprog
-started, full console in `logs/verification-serial.log`). The fuzzing
-pipeline's state-primed reproduction sessions reproduced the same crash
-repeatedly on freshly replayed VMs, typically within 4-10 minutes of
-session start. With `-repeat=0` the program set keeps looping until the
-crash fires, so leaving it running is sufficient. All fresh-VM attempts so
-far have hit; the stable success rate over many runs has not been formally
-measured.
+Expected time to hit: roughly **3-5 minutes**. In the standalone
+verification run the kernel BUG fired at 290.6 s after guest boot, which is
+~250 s (~3 min 20 s) after syz-execprog started (guest boot completed
+~40 s before the reproducer). The fuzzing pipeline's state-primed
+reproduction sessions reproduced the same crash repeatedly on freshly
+replayed VMs, typically within 4-10 minutes of session start. With
+`-repeat=0` the program set keeps looping until the crash fires. All
+fresh-VM attempts so far have hit; the stable success rate over many runs
+has not been formally measured.
+
+`reproducer/repro.prog` is a syzkaller-extracted single-call program
+(`bpf$PROG_LOAD`); it does **not** reproduce the GFS2 crash independently —
+use `repro.kernsight.prog`. It is included only as original evidence of
+what the pipeline minimiser extracted for this crash title.
 
 ## Files
 
 - `kernel.config` — kernel configuration used (also required to interpret addresses)
 - `environment.txt` — kernel image info (sha256), QEMU command line, syzkaller commit, reproducer command
 - `reproducer/repro.kernsight.prog` — pipeline-verified reproducer (107-program ordered set: state tail + triggering statfs)
-- `reproducer/repro.prog` — minimal triggering testcase (state-dependent; does not reproduce alone)
+- `reproducer/repro.prog` — syzkaller-extracted single-call program (bpf$PROG_LOAD); does not reproduce the GFS2 crash independently
 - `reproducer/repro.priming.prog` — state-priming program set (pipeline repro recipe)
 - `logs/log-*.txt`, `logs/report-*.txt` — original syzkaller execution logs and crash reports from the fuzzing pipeline
 - `logs/machineInfo-*.txt`, `logs/title-stat.json` — guest environment info and title statistics
-- `logs/crash-serial-excerpt.txt` — serial console tail of a verified crash
+- `logs/crash-serial-excerpt.txt` — serial console excerpt of the verified crash, including the glock holder diagnostics (original/new holders, lock type) and the BUG
 - `logs/verification-serial.log` — full serial console of an independent verification run on a fresh VM (BUG at 290.6 s after boot)
 
 ## Notes for maintainers
 
-- The trigger is `statfs()` on a gfs2 mount whose glock holders were left
-  in a particular state by prior operations (`gfs2_statfs_slow()` loops
-  acquiring/releasing the statfs glock and iopen/inode glocks).
+- What is confirmed: during the statfs slow path, the same task ended up
+  queueing a second shared holder for a resource-group glock that already
+  had a holder owned by that task, and `add_to_queue()` BUGs on it
+  (glock dump in `logs/crash-serial-excerpt.txt`: n:3/22, lock type 3,
+  both holders `statfs_by_dentry`, pid 17923).
+- Suspected mechanism (based on the source, not yet confirmed): the
+  resource-group iteration in `gfs2_statfs_slow()`
+  (`gfs2_rgrpd_get_first()`/`gfs2_rgrpd_get_next()`) wraps around at the
+  end of the resource-group tree, so a resource group can be revisited
+  before its previous holder is released; with up to 64 asynchronous
+  holder slots, a file system with a small number of resource groups could
+  re-queue the same glock within one pass. The number of resource groups
+  in the reproduced image has not yet been checked against this theory.
 - We can provide the kernel image, additional crash instances or raw
   artifacts on request.
