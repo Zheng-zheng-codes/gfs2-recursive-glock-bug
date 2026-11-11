@@ -51,8 +51,9 @@ the configuration. The syzkaller build used is commit
 `853b104bb454141a5b0fc0e4218ec78e9f34ffb1`.
 
 The crash depends on glock-holder state accumulated by the preceding
-programs of the crash log, so the reproducer is an ordered program set of
-107 programs (1731 lines) rather than a single call:
+programs of the crash log, so the reproducer contains 107 programs stored
+in their original order (1731 lines) and replayed concurrently using
+-procs=8 and -repeat=0:
 
 ```sh
 # in the guest, as root:
@@ -65,7 +66,7 @@ triggers `statfs()`. Run it as-is in a loop (`-repeat=0`).
 
 Expected time to hit: roughly **3-5 minutes**. In the standalone
 verification run the kernel BUG fired at 290.6 s after guest boot, which is
-~250 s (~3 min 20 s) after syz-execprog started (guest boot completed
+~250 s (~4 min 10 s) after syz-execprog started (guest boot completed
 ~40 s before the reproducer). The fuzzing pipeline's state-primed
 reproduction sessions reproduced the same crash repeatedly on freshly
 replayed VMs, typically within 4-10 minutes of session start. With
@@ -94,9 +95,10 @@ what the pipeline minimiser extracted for this crash title.
 
 - What is confirmed: during the statfs slow path, the same task ended up
   queueing a second shared holder for a resource-group glock that already
-  had a holder owned by that task, and `add_to_queue()` BUGs on it
-  (glock dump in `logs/crash-serial-excerpt.txt`: n:3/22, lock type 3,
-  both holders `statfs_by_dentry`, pid 17923).
+  had a holder owned by that task, and `add_to_queue()` BUGs on it. The
+  diagnostics at the top of `logs/crash-serial-excerpt.txt` show both the
+  "original" and the "new" holder (`statfs_by_dentry`, pid 17923) and the
+  glock dump (`n:3/22`, lock type 3).
 - Suspected mechanism (based on the source, not yet confirmed): the
   resource-group iteration in `gfs2_statfs_slow()`
   (`gfs2_rgrpd_get_first()`/`gfs2_rgrpd_get_next()`) wraps around at the

@@ -1,3 +1,9 @@
+[  290.575713][T17923] gfs2: fsid=syz:syz.s: original: statfs_by_dentry+0x13d/0x220
+[  290.575775][T17923] gfs2: fsid=syz:syz.s: pid: 17923
+[  290.575784][T17923] gfs2: fsid=syz:syz.s: lock type: 3 req lock state : 3
+[  290.575793][T17923] gfs2: fsid=syz:syz.s: new: statfs_by_dentry+0x13d/0x220
+[  290.575814][T17923] gfs2: fsid=syz:syz.s: pid: 17923
+[  290.575822][T17923] gfs2: fsid=syz:syz.s: lock type: 3 req lock state : 3
 [  290.575836][T17923] gfs2: fsid=syz:syz.s: G:  s:SH n:3/22 f:aqon t:SH d:EX/0 a:0 v:0 r:3 m:20 p:0
 [  290.575860][T17923] gfs2: fsid=syz:syz.s:  H: s:SH f:aH e:0 p:17923 [syz.6.227] statfs_by_dentry+0x13d/0x220
 [  290.575915][T17923] gfs2: fsid=syz:syz.s:  R: n:34 f:80000000 b:0/0 i:0 q:0 r:0 e:0
